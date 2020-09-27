@@ -1,14 +1,11 @@
 package source;
 
-import java.io.FileReader;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
+import java.io.File;
 
-import org.json.simple.JSONArray;
-import org.json.simple.JSONObject;
-import org.json.simple.parser.JSONParser;
+import java.time.LocalDate;
+import java.time.MonthDay;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -17,19 +14,13 @@ import java.util.stream.IntStream;
 public class HolidayPlanner
 {
 
-    /**
-     * Path to the countries directory.
-     */
-    public static String selectedCountry = "/Users/aburkova/Code/HolidayPlanner/src/resources/";
+    private static String pathToJsonFiles = "src/resources/";
 
-    /**
-     * Json value of the holiday array.
-     */
-    public static String countryHolidays = "countryHolidays";
-    /**
-     * Time format.
-     */
-    public static String timeFormat = "yyyy-MM-dd";
+    private static String jsonValOfHolidayArray = "countryHolidays";
+
+    private static int maxNumOfDaysInTheTimespan = 50;
+
+    private static int sunday = 1;
 
     /**
      * Fetches a start date, an end date and a country, estimates the number of holidays and
@@ -41,7 +32,7 @@ public class HolidayPlanner
      * @param country   selected country.
      * @return a number of holiday days the person should take.
      */
-    public int getNumOfDays( String startDate, String endDate, String country )
+    public int getNumOfDays( LocalDate startDate, LocalDate endDate, String country )
     {
 
         if( startDate == null || endDate == null || country == null )
@@ -50,55 +41,59 @@ public class HolidayPlanner
               "Start date: " + startDate + ". End date: " + endDate + ". Country: " + country );
         }
 
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern( timeFormat );
-        LocalDate firstDate;
-        LocalDate secondDate;
+        int currentYear = Calendar.getInstance().get( Calendar.YEAR );
+        int currentMonth = Calendar.getInstance().get( Calendar.MONTH );
 
-        try
+        if( currentMonth < Calendar.APRIL )
         {
-            firstDate = LocalDate.parse( startDate, formatter );
-            secondDate = LocalDate.parse( endDate, formatter );
-        }
-        catch( Exception e )
-        {
-            throw e;
+            currentYear = currentYear - 1;
         }
 
-        if( firstDate.isAfter( secondDate ) )
+        LocalDate startOfBusinessYear = MonthDay.of( 4, 1 ).atYear( currentYear );
+        LocalDate endOfBusinessYear = MonthDay.of( 3, 31 ).atYear( currentYear + 1 );
+
+        if( startDate.isAfter( endDate ) )
         {
             throw new IllegalArgumentException( "The first date cannot be after the second date" );
         }
-        else if( ( firstDate.isBefore( LocalDate.parse( "2020-04-01" ) ) ||
-          ( secondDate.isAfter( LocalDate.parse( "2021-03-31" ) ) ) ) )
+        else if( startDate.isBefore( startOfBusinessYear ) || endDate.isAfter( endOfBusinessYear ) )
         {
-            throw new IllegalArgumentException( "The given time period is invalid." );
+            throw new IllegalArgumentException( "The given time period is invalid (" + startDate + ", " + endDate + ")." );
         }
-        else if( daysInTimeSpan( firstDate, secondDate ).size() > 50 )
+        else if( daysInTimeSpan( startDate, endDate ).size() > maxNumOfDaysInTheTimespan )
         {
-            throw new IllegalArgumentException( "The time span is too big." );
+            throw new IllegalArgumentException( "The time span between " + startDate + " and " + endDate + " is too big."
+              + " Shouldn't exceed " + maxNumOfDaysInTheTimespan + " days." );
         }
 
-        List<LocalDate> allDays = daysInTimeSpan( firstDate, secondDate );
-        List<LocalDate> holidays = parseFileData( selectedCountry + country + ".json", countryHolidays );
+        File jsonCountryFile = new File( pathToJsonFiles + country + ".json" );
 
-        List<LocalDate> common = new ArrayList<>( allDays );
-        common.retainAll( holidays );
+        JsonFileDataParser parser = new JsonFileDataParser();
+        List<LocalDate> holidays = parser.parseFileData( jsonCountryFile.getAbsolutePath(), jsonValOfHolidayArray );
+        List<LocalDate> allDays = daysInTimeSpan( startDate, endDate );
+
+        List<LocalDate> listOfHolidays = new ArrayList<>( allDays );
+        listOfHolidays.retainAll( holidays );
 
         List<Integer> workDays = new ArrayList<>();
         for( int i = 0; i < allDays.size(); i++ )
         {
+            LocalDate oneDayFromList = allDays.get( i );
+            Date localDateToDate = Date.from( oneDayFromList.atStartOfDay( ZoneId.systemDefault() ).toInstant() );
+
             Calendar date = Calendar.getInstance();
-            date.setTime( Date.from( allDays.get( i ).atStartOfDay( ZoneId.systemDefault() ).toInstant() ) );
+            date.setTime( localDateToDate );
+
             int dayOfWeek = date.get( Calendar.DAY_OF_WEEK );
 
-            if( dayOfWeek != 1 )
+            if( dayOfWeek != sunday )
             {
                 workDays.add( dayOfWeek );
             }
         }
 
         int numOfWorkDays = workDays.size();
-        int numOfHolidays = common.size();
+        int numOfHolidays = listOfHolidays.size();
 
         return numOfWorkDays - numOfHolidays;
 
@@ -120,39 +115,6 @@ public class HolidayPlanner
           .limit( numOfDays )
           .mapToObj( i -> startDate.plusDays( i ) )
           .collect( Collectors.toList() );
-    }
-
-    /**
-     * Reads json from the file, iterates through the json list and
-     * returns an array list of holidays' dates.
-     *
-     * @param filePath path to country dir.
-     * @param value    value in the json file.
-     * @return list of country's holidays' dates.
-     */
-    private static List<LocalDate> parseFileData( String filePath, String value )
-    {
-        JSONParser parser = new JSONParser();
-        List<LocalDate> holidays = new ArrayList<>();
-        try
-        {
-            Object obj = parser.parse( new FileReader( filePath ) );
-            JSONObject jsonObject = (JSONObject)obj;
-            JSONArray list = (JSONArray)jsonObject.get( value );
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern( timeFormat );
-            Iterator<String> iterator = list.iterator();
-
-            while( iterator.hasNext() )
-            {
-                holidays.add( LocalDate.parse( iterator.next(), formatter ) );
-            }
-        }
-        catch( Exception e )
-        {
-            e.printStackTrace();
-        }
-
-        return holidays;
     }
 
 }
